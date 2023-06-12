@@ -21,6 +21,7 @@ import torch
 # from tqdm import tqdm
 import random
 sys.path.append("..")
+sys.path.append(".") #modified eval_paper_authors
 from rgcn import utils
 from rgcn.utils import build_sub_graph
 from src.rrgcn import RecurrentRGCN
@@ -51,7 +52,9 @@ def temporal_regularization(params1, params2):
     # param_sizes = [param.numel() for param in model.parameters()]    
 
 
-def test(model, history_len, history_list, test_list, num_rels, num_nodes, use_cuda, all_ans_list, all_ans_r_list, model_name, mode):
+def test(model, history_len, history_list, test_list, num_rels, num_nodes, use_cuda, all_ans_list, all_ans_r_list, model_name, mode,
+         eval_paper_authors_datasetname=None, #this line was added by  eval_paper_authors for logging
+         eval_paper_authors_online_bool= False):  #this line was added by  eval_paper_authors for logging):
     """
     :param model: model used to test
     :param history_list:    all input history snap shot list, not include output label train list or valid list
@@ -65,6 +68,34 @@ def test(model, history_len, history_list, test_list, num_rels, num_nodes, use_c
     :param mode
     :return mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r
     """
+
+        ### ADDED  eval_paper_authors
+    #for logging scores
+    import inspect
+    import sys
+    import os
+    currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+    # parentdir = os.path.dirname(currentdir)
+    sys.path.insert(1, currentdir) 
+    sys.path.insert(1, os.path.join(sys.path[0], '../..'))        
+    import evaluation_utils 
+    exp_nr = 0
+    if  eval_paper_authors_online_bool== True:
+        steps = 'singlesteponline'        
+    else:
+        steps ='singlestep'
+
+    method = 'cen'
+    filter = 'timeaware'
+    
+    log = False
+    if mode == "test":
+        if eval_paper_authors_datasetname  != None:
+            log = True
+            logname = method + '-' +  eval_paper_authors_datasetname + '-' +str(exp_nr) + '-' +steps + '-' + filter
+            print('logname is:' + logname)
+    ## END ADDED  eval_paper_authors
+
     ranks_raw, ranks_filter, mrr_raw_list, mrr_filter_list = [], [], [], []
     ranks_raw_r, ranks_filter_r, mrr_raw_list_r, mrr_filter_list_r = [], [], [], []
 
@@ -84,12 +115,26 @@ def test(model, history_len, history_list, test_list, num_rels, num_nodes, use_c
     # do not have inverse relation in test input
     input_list = [snap for snap in history_list[-history_len:]]
 
+    eval_paper_authors_logging_dict = {}   ## ADDED  eval_paper_authors
+
     for time_idx, test_snap in enumerate(test_list):
         tc = start_time + time_idx
         history_glist = [build_sub_graph(num_nodes, num_rels, g, use_cuda, args.gpu) for g in input_list]
     
         test_triples_input = torch.LongTensor(test_snap).cuda() if use_cuda else torch.LongTensor(test_snap)
         final_score, final_r_score = model.predict(history_glist, test_triples_input, use_cuda)
+
+        ## ADDED  eval_paper_authors
+        # # # logging scores
+        if log == True:
+            for triple, subobscores in zip(test_triples_input, final_score):
+                quad = triple.tolist()
+                quad.append(time_idx)
+
+                query_name, gt_test_query_ids = evaluation_utils.query_name_from_quadruple(quad, num_rels)
+
+                eval_paper_authors_logging_dict[query_name] = [subobscores.cpu().detach().numpy(), gt_test_query_ids]# list w element 0: scores, element 1:gt 
+        ## END ADDED  eval_paper_authors
 
         mrr_filter_snap_r, mrr_snap_r, rank_raw_r, rank_filter_r = utils.get_total_rank(test_triples_input, final_r_score, all_ans_r_list[tc], eval_bz=1000, rel_predict=1)
         mrr_filter_snap, mrr_snap, rank_raw, rank_filter = utils.get_total_rank(test_triples_input, final_score, all_ans_list[tc], eval_bz=1000, rel_predict=0)
@@ -116,11 +161,30 @@ def test(model, history_len, history_list, test_list, num_rels, num_nodes, use_c
     mrr_filter = utils.stat_ranks(ranks_filter, "filter_ent")
     mrr_raw_r = utils.stat_ranks(ranks_raw_r, "raw_rel")
     mrr_filter_r = utils.stat_ranks(ranks_filter_r, "filter_rel")
+
+
+    # eval_paper_authors (logging)
+    if log == True:
+        import pathlib
+        dirname = os.path.join(pathlib.Path().resolve(), 'results' )
+        eval_paper_authorsfilename = os.path.join(dirname, logname + ".pkl")
+        # if not os.path.isfile( eval_paper_authorsfilename):
+        with open( eval_paper_authorsfilename,'wb') as file:
+            pickle.dump( eval_paper_authors_logging_dict, file, protocol=4) 
+        file.close()
+        print('wrote file to ' + dirname + eval_paper_authorsfilename)
+        print('finished testing')
+    #END  eval_paper_authors
+
+    
+    
     return mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r
 
 
 
-def continual_test(model, test_history_len, history_list, data_list, num_rels, num_nodes, use_cuda, all_ans_list, all_ans_r_list, model_name, mode):
+def continual_test(model, test_history_len, history_list, data_list, num_rels, num_nodes, use_cuda, all_ans_list, all_ans_r_list, model_name, mode,
+        eval_paper_authors_datasetname=None, #this line was added by  eval_paper_authors for logging
+        eval_paper_authors_online_bool= True):
     """
     :param model: model used to test
     :param history_list:    all input history snap shot list, not include output label train list or valid list
@@ -136,6 +200,32 @@ def continual_test(model, test_history_len, history_list, data_list, num_rels, n
     """
     ranks_raw, ranks_filter, mrr_raw_list, mrr_filter_list = [], [], [], []
     ranks_raw_r, ranks_filter_r, mrr_raw_list_r, mrr_filter_list_r = [], [], [], []
+        ### ADDED  eval_paper_authors
+    #for logging scores
+    import inspect
+    import sys
+    import os
+    currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+    # parentdir = os.path.dirname(currentdir)
+    sys.path.insert(1, currentdir) 
+    sys.path.insert(1, os.path.join(sys.path[0], '../..'))        
+    import evaluation_utils 
+    exp_nr = 0
+    if  eval_paper_authors_online_bool== True:
+        steps = 'singlesteponline'        
+    else:
+        steps ='singlestep'
+
+    method = 'cen'
+    filter = 'timeaware'
+    
+    log = False
+    if mode == "test":
+        if eval_paper_authors_datasetname  != None:
+            log = True
+            logname = method + '-' +  eval_paper_authors_datasetname + '-' +str(exp_nr) + '-' +steps + '-' + filter
+
+    ## END ADDED  eval_paper_authors
 
     # load pretrained model which valid in the whole valid data
     start_idx = len(history_list)
@@ -170,7 +260,7 @@ def continual_test(model, test_history_len, history_list, data_list, num_rels, n
     # optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=args.ft_lr, weight_decay=0)
     
-    # Note: do not have inverse relation in test input
+    # Note: do not have inverse relation in test input 
     valid_input_list = [snap for snap in history_list[-args.test_history_len-2:-2]] # history for ft training (, tc-2)
     valid_snap = history_list[-2]    # snapshot for ft training at snapshot at tc-2
     ft_input_list = [snap for snap in history_list[-args.test_history_len-1:-1]] # history for ft validation (,tc-1)
@@ -178,8 +268,10 @@ def continual_test(model, test_history_len, history_list, data_list, num_rels, n
     test_input_list = [snap for snap in history_list[-args.test_history_len:]]  # history for testing (, tc)
     # ft_output_list = history_list[-args.test_history_len:]
      
+    eval_paper_authors_logging_dict = {}   ## ADDED  eval_paper_authors
+
     # starting continual learning
-    for time_idx, test_snap in enumerate(data_list):
+    for time_idx, test_snap in enumerate(data_list): #comment eval_paper_authors: loop through e.g. test set
         tc = start_idx + time_idx 
         print("-----------------------{}-----------------------".format(tc))
         # step 1: get the history graphs for ft training : ft_input_list -> ft_snapshot
@@ -209,7 +301,7 @@ def continual_test(model, test_history_len, history_list, data_list, num_rels, n
         mrr_filter_test_snap, mrr_test_snap, rank_raw, rank_filter = utils.get_total_rank(test_tensor, final_score, all_ans_list[tc], eval_bz=1000, rel_predict=0)
         print("Pretrained Model : test mrr ", mrr_filter_test_snap)
 
-        # result of the last step fine-tuned model on test set (tc)
+        # result of the last step fine-tuned model on test set (tc) # first iteration: mrr on first test timestep
         final_score, final_r_score = model.predict(test_history_glist, test_tensor, use_cuda)
         mrr_filter_test_snap_r, mrr_test_snap_r, rank_raw_r, rank_filter_r = utils.get_total_rank(test_tensor, final_r_score, all_ans_r_list[tc], eval_bz=1000, rel_predict=1)
         mrr_filter_test_snap, mrr_test_snap, rank_raw, rank_filter = utils.get_total_rank(test_tensor, final_score, all_ans_list[tc], eval_bz=1000, rel_predict=0)
@@ -278,6 +370,21 @@ def continual_test(model, test_history_len, history_list, data_list, num_rels, n
         model.eval()
         # step 3: start test
         final_score, final_r_score = model.predict(test_history_glist, test_tensor, use_cuda)
+
+
+        ## ADDED  eval_paper_authors
+        # # # logging scores
+        if log == True:
+            for triple, subobscores in zip(test_tensor, final_score):
+                quad = triple.tolist()
+                quad.append(time_idx)
+
+                query_name, gt_test_query_ids = evaluation_utils.query_name_from_quadruple(quad, num_rels)
+
+                eval_paper_authors_logging_dict[query_name] = [subobscores.cpu().detach().numpy(), gt_test_query_ids]# list w element 0: scores, element 1:gt 
+        ## END ADDED  eval_paper_authors
+
+
         # step 4: evaluation
         mrr_filter_snap_r, mrr_snap_r, rank_raw_r, rank_filter_r = utils.get_total_rank(test_tensor, final_r_score, all_ans_r_list[tc], eval_bz=1000, rel_predict=1)
         mrr_filter_snap, mrr_snap, rank_raw, rank_filter = utils.get_total_rank(test_tensor, final_score, all_ans_list[tc], eval_bz=1000, rel_predict=0)
@@ -310,11 +417,25 @@ def continual_test(model, test_history_len, history_list, data_list, num_rels, n
         mrr_raw_list_r.append(mrr_snap_r)
         mrr_filter_list_r.append(mrr_filter_snap_r)
 
+
     
     mrr_raw = utils.stat_ranks(ranks_raw, "raw_ent")
     mrr_filter = utils.stat_ranks(ranks_filter, "filter_ent")
     mrr_raw_r = utils.stat_ranks(ranks_raw_r, "raw_rel")
     mrr_filter_r = utils.stat_ranks(ranks_filter_r, "filter_rel")
+
+    # eval_paper_authors (logging)
+
+    if log == True:
+        import pathlib
+        dirname = os.path.join(pathlib.Path().resolve(), 'results' )
+        eval_paper_authorsfilename = os.path.join(dirname, logname + ".pkl")
+        # if not os.path.isfile( eval_paper_authorsfilename):
+        with open( eval_paper_authorsfilename,'wb') as file:
+            pickle.dump( eval_paper_authors_logging_dict, file, protocol=4) 
+        file.close()
+    #END  eval_paper_authors
+
     return mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r
 
 
@@ -363,6 +484,7 @@ def run_experiment(args, n_hidden=None, n_layers=None, dropout=None, n_bases=Non
     if not os.path.exists('../models/{}/'.format(args.dataset)):
         os.makedirs('../models/{}/'.format(args.dataset))
     test_state_file = '../models/{}/{}'.format(args.dataset, test_model_name) 
+    # test_state_file = './models/{}/{}'.format(args.dataset, test_model_name)  #modified eval_paper_authors
     print("Sanity Check: stat name : {}".format(test_state_file))
     print("Sanity Check: Is cuda available ? {}".format(torch.cuda.is_available()))
 
@@ -409,9 +531,13 @@ def run_experiment(args, n_hidden=None, n_layers=None, dropout=None, n_bases=Non
                                                 all_ans_list, 
                                                 all_ans_list_r, 
                                                 test_state_file, 
-                                                "test")                                 
+                                                "test",                                                
+                                                eval_paper_authors_datasetname=args.dataset, #this line was added by  eval_paper_authors for logging
+                                                eval_paper_authors_online_bool= False)  #this line was added by  eval_paper_authors for logging)                                 
     elif args.test == 2:    # normal test on test set
+        print('test args 2, ' + test_state_file)
         if os.path.exists(test_state_file):
+            print('path exists')
             mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r = test(model, 
                                                 args.test_history_len, 
                                                 train_list+valid_list, 
@@ -422,7 +548,11 @@ def run_experiment(args, n_hidden=None, n_layers=None, dropout=None, n_bases=Non
                                                 all_ans_list, 
                                                 all_ans_list_r, 
                                                 test_state_file, 
-                                                "test")
+                                                "test",                                                
+                                                eval_paper_authors_datasetname=args.dataset, #this line was added by  eval_paper_authors for logging
+                                                eval_paper_authors_online_bool= False)  #this line was added by  eval_paper_authors for logging)
+        else:
+            print('doesnt exist')
     elif args.test == 3:    # continual test the validataion set 
         if os.path.exists(test_state_file):
                 mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r = continual_test(model,
@@ -435,7 +565,9 @@ def run_experiment(args, n_hidden=None, n_layers=None, dropout=None, n_bases=Non
                                                 all_ans_list, 
                                                 all_ans_list_r, 
                                                 test_state_file, 
-                                                "valid")
+                                                "valid",                                                
+                                                eval_paper_authors_datasetname=args.dataset, #this line was added by  eval_paper_authors for logging
+                                                eval_paper_authors_online_bool= True)  #this line was added by  eval_paper_authors for logging
     elif args.test == 4:    # continual test the testing set
         if os.path.exists(test_state_file):
                 mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r = continual_test(model, 
@@ -448,7 +580,9 @@ def run_experiment(args, n_hidden=None, n_layers=None, dropout=None, n_bases=Non
                                                 all_ans_list, 
                                                 all_ans_list_r, 
                                                 test_state_file, 
-                                                "test")
+                                                "test",                                                
+                                                eval_paper_authors_datasetname=args.dataset, #this line was added by  eval_paper_authors for logging
+                                                eval_paper_authors_online_bool= True)  #this line was added by  eval_paper_authors for logging)
     elif args.test == -1:
         print("----------------------------------------start pre training model with history length {}----------------------------------------\n".format(args.start_history_len))
         model_name = "{}-{}-ly{}-dilate{}-his{}-dp{}-gpu{}"\
@@ -540,17 +674,29 @@ def run_experiment(args, n_hidden=None, n_layers=None, dropout=None, n_bases=Non
         print("\n"+"-"*10+"Load model with history length {}".format(args.start_history_len)+"-"*10+"\n")
         model.load_state_dict(init_checkpoint['state_dict'])
         test_history_len = args.start_history_len
-        mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r = test(model, 
-                                                            args.start_history_len,
-                                                            train_list+valid_list,
-                                                            test_list, 
-                                                            num_rels, 
-                                                            num_nodes, 
-                                                            use_cuda, 
-                                                            all_ans_list, 
-                                                            all_ans_list_r, 
-                                                            init_state_file, 
-                                                            mode="test")
+        # mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r = test(model, 
+        #                                                     args.start_history_len,
+        #                                                     train_list+valid_list,
+        #                                                     test_list, 
+        #                                                     num_rels, 
+        #                                                     num_nodes, 
+        #                                                     use_cuda, 
+        #                                                     all_ans_list, 
+        #                                                     all_ans_list_r, 
+        #                                                     init_state_file, 
+        #                                                     mode="test")
+
+        mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r = test(model,  #modified eval paper authors: do not feed test_list
+                                                    args.start_history_len,
+                                                    train_list,
+                                                    valid_list, 
+                                                    num_rels, 
+                                                    num_nodes, 
+                                                    use_cuda, 
+                                                    all_ans_list, 
+                                                    all_ans_list_r, 
+                                                    init_state_file, 
+                                                    mode="test")
         best_mrr_list = [mrr_filter.item()]                                                   
         # start knowledge distillation
         ks_idx = 0
@@ -648,6 +794,7 @@ def run_experiment(args, n_hidden=None, n_layers=None, dropout=None, n_bases=Non
             else:
                 best_mrr_list.append(mrr_filter.item())
 
+        print(args.dataset, "done with knowledge distillation. stopped with best test history len: ", test_history_len) #eval paper authors
         mrr_raw, mrr_filter, mrr_raw_r, mrr_filter_r = test(model, 
                                                             test_history_len,
                                                             train_list+valid_list,
